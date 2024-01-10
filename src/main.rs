@@ -1,4 +1,4 @@
-use chrono::Local;
+use chrono::{Local, NaiveDate};
 use rusqlite::{named_params, params, Connection, Result};
 use std::error::Error;
 use std::fs;
@@ -7,9 +7,6 @@ use std::path::PathBuf;
 enum QueryPath {
     Create,
     Insert,
-    Read,
-    Update,
-    Delete,
 }
 
 impl QueryPath {
@@ -17,9 +14,6 @@ impl QueryPath {
         match self {
             QueryPath::Create => PathBuf::from("src/db/sql/create.sql"),
             QueryPath::Insert => PathBuf::from("src/db/sql/add.sql"),
-            QueryPath::Read => PathBuf::from("src/db/sql/read.sql"),
-            QueryPath::Update => PathBuf::from("src/db/sql/update.sql"),
-            QueryPath::Delete => PathBuf::from("src/db/sql/delete.sql"),
         }
     }
 }
@@ -56,6 +50,19 @@ pub struct Task {
     pub deleted: u8,
 }
 
+impl Task {
+    fn from(self, update_task: UpdateTask) -> Self {
+        Task {
+            id: self.id,
+            title: update_task.title.unwrap_or(self.title),
+            description: update_task.description.unwrap_or(self.description),
+            create_date: self.create_date,
+            status: update_task.status.unwrap_or(self.status),
+            deleted: update_task.deleted.unwrap_or(self.deleted)
+        }
+    }
+}
+
 pub struct AddTask {
     pub title: String,
     pub description: String,
@@ -77,6 +84,7 @@ impl AddTask {
             deleted: 0,
         }
     }
+
 }
 
 pub struct UpdateTask {
@@ -175,19 +183,56 @@ fn task_by_id(conn: &Connection, id: u64) -> Result<Task> {
     }
 }
 
-fn update_task(conn: &Connection, id: u64, update_task: UpdateTask) -> Result<()> {
+fn delete_task(conn: &Connection, id: u64) -> Result<()> {
     let stmt = conn.execute(
-        "UPDATE tasks SET (title) = :title, (description) = :description, (status) = :status, (deleted) = :deleted WHERE (id) = :id",
+        "UPDATE tasks SET deleted = 1 WHERE id = :id",
         named_params! {
             ":id": id,
-            ":title": update_task.title,
-            ":description": update_task.description,
-            ":status": update_task.status,
-            ":deleted": update_task.deleted,
-        }
+        },
     )?;
+    Ok(())
+}
+
+fn update_task(conn: &Connection, id: u64, update_task: UpdateTask) -> Result<()> {
+    let mut current_task = task_by_id(conn, id).ok();
+    match current_task {
+        Some(ct) => {
+            let _stmt = conn.execute(
+                "UPDATE tasks SET (title) = :title, (description) = :description, (status) = :status, (deleted) = :deleted WHERE (id) = :id",
+                named_params! {
+                    ":id": id,
+                    ":title": update_task.title,
+                    ":description": update_task.description,
+                    ":status": update_task.status,
+                    ":deleted": update_task.deleted,
+                }
+            )?;
+        }
+        None => {}
+    }
     // stmt.update_rows()
     Ok(())
+}
+
+fn between_dates(conn: &Connection, start_date: String, end_date: String) -> Result<Vec<Option<Task>>> {
+    let mut stmt = conn.prepare(
+       "SELECT * FROM tasks WHERE create_date BETWEEN ?1 AND ?2",
+
+    )?;
+
+    let tasks = stmt.query_map(params![start_date, end_date], |row| {
+        Ok(Task {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            description: row.get(2)?,
+            create_date: row.get(3)?,
+            status: row.get(4)?,
+            deleted: row.get(5)?,
+            })
+        })?;
+
+    let geted_tasks: Vec<Option<Task>> = tasks.into_iter().map(|task| task.ok()).collect();
+    Ok(geted_tasks)
 }
 
 fn main() {
@@ -207,6 +252,11 @@ fn main() {
     let _ = update_task(&conn, 1, UpdateTask::default()).ok();
     println!("{:?}", finded_task);
 
-    let finded_tasks = task_by_title(&conn, &mut "%таск".to_owned()).ok();
+    let _ = delete_task(&conn, 2);
+
+    let finded_tasks = task_by_title(&conn, &mut "".to_owned()).ok();
     println!("{:?}", finded_tasks);
+
+    let between = between_dates(&conn, "2024-01-09".to_string(), "2024-01-11".to_string()).ok();
+    println!("{:?}", between);
 }
