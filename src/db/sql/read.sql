@@ -1,1 +1,1 @@
-SELECT * FROM tasks where title like ?
+SELECT * FROM tasks where id = ?

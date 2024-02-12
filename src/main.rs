@@ -1,8 +1,19 @@
-use chrono::{Local, NaiveDate};
+#![allow(dead_code)]
+use chrono::Local;
+use crossterm::{
+    event::{self, Event::Key, KeyCode::Char},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    prelude::{CrosstermBackend, Frame, Terminal},
+    widgets::Paragraph,
+};
 use rusqlite::{named_params, params, Connection, Result};
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::PathBuf; //::{stdout, Result};
 
 enum QueryPath {
     Create,
@@ -30,6 +41,7 @@ enum Status {
     InProcess,
     Completed,
 }
+
 impl Status {
     fn to_string(&self) -> String {
         match self {
@@ -58,7 +70,7 @@ impl Task {
             description: update_task.description.unwrap_or(self.description),
             create_date: self.create_date,
             status: update_task.status.unwrap_or(self.status),
-            deleted: update_task.deleted.unwrap_or(self.deleted)
+            deleted: update_task.deleted.unwrap_or(self.deleted),
         }
     }
 }
@@ -84,7 +96,6 @@ impl AddTask {
             deleted: 0,
         }
     }
-
 }
 
 pub struct UpdateTask {
@@ -121,7 +132,6 @@ fn add_task(conn: &Connection, task: AddTask) -> Result<()> {
     // Добавление заметки
     match query_from(QueryPath::Insert) {
         Ok(query) => {
-            // conn.execute(query.as_str(), task.into());
             let _ = conn.execute(
                 query.as_str(),
                 (
@@ -214,11 +224,12 @@ fn update_task(conn: &Connection, id: u64, update_task: UpdateTask) -> Result<()
     Ok(())
 }
 
-fn between_dates(conn: &Connection, start_date: String, end_date: String) -> Result<Vec<Option<Task>>> {
-    let mut stmt = conn.prepare(
-       "SELECT * FROM tasks WHERE create_date BETWEEN ?1 AND ?2",
-
-    )?;
+fn between_dates(
+    conn: &Connection,
+    start_date: String,
+    end_date: String,
+) -> Result<Vec<Option<Task>>> {
+    let mut stmt = conn.prepare("SELECT * FROM tasks WHERE create_date BETWEEN ?1 AND ?2")?;
 
     let tasks = stmt.query_map(params![start_date, end_date], |row| {
         Ok(Task {
@@ -228,14 +239,14 @@ fn between_dates(conn: &Connection, start_date: String, end_date: String) -> Res
             create_date: row.get(3)?,
             status: row.get(4)?,
             deleted: row.get(5)?,
-            })
-        })?;
+        })
+    })?;
 
     let geted_tasks: Vec<Option<Task>> = tasks.into_iter().map(|task| task.ok()).collect();
     Ok(geted_tasks)
 }
 
-fn main() {
+fn test_db_func() {
     let conn = match Connection::open("tasks.db") {
         Ok(conn) => conn,
         Err(_) => panic!("Не удалось подключиться к базе данных..."),
@@ -259,4 +270,107 @@ fn main() {
 
     let between = between_dates(&conn, "2024-01-09".to_string(), "2024-01-11".to_string()).ok();
     println!("{:?}", between);
+}
+
+struct App {
+    counter: i64,
+    should_quit: bool,
+}
+
+fn startup() -> io::Result<()> {
+    enable_raw_mode()?;
+    execute!(std::io::stderr(), EnterAlternateScreen)?;
+    Ok(())
+}
+fn shutdown() -> io::Result<()> {
+    execute!(std::io::stderr(), LeaveAlternateScreen)?;
+    disable_raw_mode()?;
+    Ok(())
+}
+
+fn tui(app: &App, f: &mut Frame) {
+    f.render_widget(
+        Paragraph::new(format!("Counter: {}", app.counter)),
+        f.size(),
+    );
+}
+
+fn update(app: &mut App) -> io::Result<()> {
+    if event::poll(std::time::Duration::from_millis(250))? {
+        if let Key(key) = event::read()? {
+            if key.kind == event::KeyEventKind::Press {
+                match key.code {
+                    Char('j') => app.counter += 1,
+                    Char('k') => app.counter -= 1,
+                    Char('q') => app.should_quit = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run() -> io::Result<()> {
+    // ratatui terminal
+    let mut t = Terminal::new(CrosstermBackend::new(std::io::stderr()))?;
+
+    // application state
+    let mut app = App { counter: 0, should_quit: false };
+
+    loop {
+        // application render
+        t.draw(|f| {
+            tui(&app, f);
+        })?;
+
+        // application update
+        update(&mut app)?;
+
+        // application exit
+        if app.should_quit {
+        break;
+        }
+    }
+
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    startup()?;
+    let status = run();
+    shutdown()?;
+    status?;
+    // io::stdout().execute(EnterAlternateScreen)?;
+    // enable_raw_mode()?;
+    // let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    // terminal.clear()?;
+
+    // // TODO main loop
+    // loop {
+    //     terminal.draw(|frame| {
+    //         let area = frame.size();
+    //         frame.render_widget(
+    //             Paragraph::new("Hello Ratatui! (press 'q' to quit)")
+    //                 .white()
+    //                 .on_blue(),
+    //             area,
+    //         );
+    //     })?;
+
+    //     if event::poll(std::time::Duration::from_millis(16))? {
+    //         if let event::Event::Key(key) = event::read()? {
+    //             if key.kind == KeyEventKind::Press
+    //                 && key.code == KeyCode::Char('q')
+    //             {
+    //                 break;
+    //             }
+    //         }
+    //     }
+    // }
+
+    // io::stdout().execute(LeaveAlternateScreen)?;
+    // disable_raw_mode()?;
+    // Ok(())
+    Ok(())
 }
